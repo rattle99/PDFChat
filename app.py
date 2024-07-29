@@ -8,7 +8,7 @@ client = chromadb.PersistentClient(path=config["PERSIST_DIRECTORY"])
 collection = client.get_or_create_collection(name=config["COLLECTION_NAME"])
 
 messages = [{"role":"system", "content":"I am going to ask you a question, which I would like you to answer based only on the provided context, and not any other information. If there is not enough information in the context to answer the question, say 'I am not sure', then try to make a guess. Make sure to keep all your responses under 3 lines. This is very important."}]
-
+# messages = [{"role":"system", "content":"You are a good chatbot."}]
 
 def searchVectorStore(query, K=5):
     embedding = get_embedding(query)
@@ -37,6 +37,9 @@ def prompt_llm(messages):
     params = {
         "model": config["CHAT_MODEL"],
         "messages": messages,
+        "options": {
+            "num_predict": 512
+        },
         "stream": False
     }
 

@@ -6,7 +6,8 @@ import re
 import nltk
 from dotenv import dotenv_values
 from utils import get_embedding
-from sklearn.metrics.pairwise import cosine_similarity
+from glob import glob
+# from sklearn.metrics.pairwise import cosine_similarity
 
 nltk.download('punkt')
 
@@ -57,12 +58,16 @@ def word_count_chunk_sentences(text, chunk_size=100, overlap=10):
 
 
 # Example usage
-pdf_path = "./PDFs/ZL-Training Manual.pdf"
-extracted_text = extract_text_from_pdf(pdf_path)
-y=clean_text(extracted_text)
+PDF_DIRECTORY = "./PDF"
+pdf_paths = glob("./PDF/*.pdf")
+all_texts = ''
+for pdf_path in tqdm(pdf_paths, desc="Chunking Documents ", colour="#bd4ced"):
+    extracted_text = extract_text_from_pdf(pdf_path)
+    y=clean_text(extracted_text)
+    all_texts += y
 
 
-documents = word_count_chunk_sentences(y)
+documents = word_count_chunk_sentences(all_texts)
 
 
 for idx, document in enumerate(tqdm(documents, desc="Parsing Chunks ", colour="#bd4ced")):
