@@ -25,4 +25,3 @@ def get_embedding(text):
         # Request was not successful
         print("Error:", response.status_code)
         return None
-
