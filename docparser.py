@@ -1,19 +1,34 @@
-import chromadb
-import requests
-from tqdm import tqdm
-import PyPDF2
 import re
-import nltk
-from dotenv import dotenv_values
-from utils import get_embedding
 from glob import glob
+
+import nltk
+import PyPDF2
+import weaviate
+from dotenv import dotenv_values
+from tqdm import tqdm
+from weaviate.classes.config import DataType, Property
+from weaviate.util import generate_uuid5
+
+from utils import get_embedding
+
 # from sklearn.metrics.pairwise import cosine_similarity
 
 nltk.download("punkt")
 
 config = dotenv_values(".env")
-client = chromadb.PersistentClient(path=config["PERSIST_DIRECTORY"])
-collection = client.get_or_create_collection(name=config["COLLECTION_NAME"])
+client = weaviate.connect_to_local()
+if not client.collections.exists(config["COLLECTION_NAME"]):
+    print(
+        f'Collection does not exist, creating collection {config["COLLECTION_NAME"]}.'
+    )
+    client.collections.create(
+        name=config["COLLECTION_NAME"],
+        properties=[
+            Property(name="content", data_type=DataType.TEXT),
+        ],
+    )
+    print("Done")
+collection = client.collections.get(name=config["COLLECTION_NAME"])
 
 
 def clean_text(text):
@@ -57,9 +72,8 @@ def word_count_chunk_sentences(text, chunk_size=100, overlap=10):
     return chunks
 
 
-# Example usage
-PDF_DIRECTORY = "./PDF"
-pdf_paths = glob("./Guides/**/*.pdf", recursive=True)
+PDF_DIRECTORY = "./Guides"
+pdf_paths = glob(PDF_DIRECTORY + "/**/*.pdf", recursive=True)
 all_texts = ""
 for pdf_path in tqdm(pdf_paths, desc="Chunking Documents ", colour="#bd4ced"):
     extracted_text = extract_text_from_pdf(pdf_path)
@@ -69,14 +83,31 @@ for pdf_path in tqdm(pdf_paths, desc="Chunking Documents ", colour="#bd4ced"):
 
 documents = word_count_chunk_sentences(all_texts)
 
-
+fails = 0
 for idx, document in enumerate(
     tqdm(documents, desc="Parsing Chunks ", colour="#bd4ced")
 ):
     embedding = get_embedding(document)
-    save_id = f"id{idx}"
-    collection.upsert(documents=document, ids=save_id, embeddings=embedding)
+    data_object = {"content": document}
+    try:
+        collection.data.insert(
+            properties=data_object,
+            uuid=generate_uuid5(data_object),
+            vector=embedding,
+        )
+    except Exception as e:
+        # Handle the specific exception
+        # print(f"Failed to add object: {e}")
+        if "already exists" in str(e):
+            # print("The object with this ID already exists.")
+            # Optional: You can take additional actions here, like updating the object instead.
+            fails += 1
+        else:
+            print("An unexpected error occurred.")
+            print(e)
 
+client.close()
+print(f"Failed to add {fails} chunks.")
 
 ## Semantic Chunking Below
 

@@ -1,12 +1,15 @@
-import requests
-import chromadb
 import json
+
+import requests
+import weaviate
 from dotenv import dotenv_values
+from weaviate.classes.query import MetadataQuery
+
 from utils import get_embedding
 
 config = dotenv_values(".env")
-client = chromadb.PersistentClient(path=config["PERSIST_DIRECTORY"])
-collection = client.get_or_create_collection(name=config["COLLECTION_NAME"])
+client = weaviate.connect_to_local()
+collection = client.collections.get(name=config["COLLECTION_NAME"])
 messages = [
     {
         "role": "system",
@@ -16,28 +19,64 @@ messages = [
 initial_query = True
 
 
-def searchVectorStore(query, K=10):
-    embedding = get_embedding(query)
-    results = collection.query(
-        query_embeddings=embedding,
-        n_results=K,  # how many results to return
+def keyword_search(query, K=10):
+    response = collection.query.bm25(
+        query=query,
+        limit=K,
+        return_metadata=MetadataQuery(score=True),
     )
 
-    return results
+    return [obj.properties["content"] for obj in response.objects]
+
+
+def vector_search(query, K=10):
+    embedding = get_embedding(query)
+    response = collection.query.near_vector(
+        near_vector=embedding,
+        limit=K,
+        return_metadata=MetadataQuery(distance=True),
+    )
+
+    return [obj.properties["content"] for obj in response.objects]
+
+
+def hybrid_search(query, K=10):
+    embedding = get_embedding(query)
+    response = collection.query.hybrid(
+        query=query,
+        vector=embedding,
+        limit=K,
+        return_metadata=MetadataQuery(score=True),
+    )
+
+    return [obj.properties["content"] for obj in response.objects]
+
+
+def getRelevantChunks(query, strategy=config["RETRIEVAL"]):
+    if strategy == "keyword":
+        return keyword_search(query)
+    if strategy == "vector":
+        return vector_search(query)
+    if strategy == "hybrid":
+        return hybrid_search(query)
+
+    raise ValueError(
+        f'Invalid argument: {strategy}. Expected strategy one of "keyword", "vector" or "hybrid".'
+    )
 
 
 def createQueryPrompt(query):
-    results = searchVectorStore(query)
-    relevantChunks = [chunk for chunk in results["documents"][0]]
+    relevantChunks = getRelevantChunks(query)
 
     queryPrompt = (
         f"Use the context provided below to answer the following question: {query}\n\n"
     )
+
     for idx, chunk in enumerate(relevantChunks):
         item = f"{idx+1}. {chunk} \n"
         queryPrompt += item
 
-    queryPrompt += f"\nYou have all the context you need provided above."
+    queryPrompt += "\nYou have all the context you need provided above."
 
     return queryPrompt
 
@@ -79,6 +118,10 @@ while True:
     userInput = input("\n\nUser : ")
     if userInput.lower() == "exit":
         break
+    if userInput.lower() == "new":
+        initial_query = True
+        messages = messages[:1]
+        continue
     prompt = userInput
     if initial_query:
         prompt = createQueryPrompt(userInput)
@@ -94,8 +137,6 @@ while True:
         if result:
             if isinstance(result, list):
                 # Final results list, not doing anything with it as we already processed all results
-                # print(type(result))
-                # print(result)
                 messages.append({"role": "assistant", "content": assistant_message})
             else:
                 # Individual streamed result
@@ -108,3 +149,5 @@ while True:
             break
 
     initial_query = False
+
+client.close()
