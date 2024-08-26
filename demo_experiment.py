@@ -1,4 +1,6 @@
 import json
+import logging
+from logging.handlers import TimedRotatingFileHandler
 
 import gradio as gr
 import requests
@@ -12,6 +14,27 @@ CONFIG = dotenv_values(".env")
 client = weaviate.connect_to_local()
 collection = client.collections.get(name=CONFIG["COLLECTION_NAME"])
 SYSTEM_PROMPT_BASE = "I am a helpful assistant.\n"
+
+logger = logging.getLogger(__name__)
+log_level = CONFIG["LOG_LEVEL"]
+if log_level == "DEBUG":
+    logger.setLevel("DEBUG")
+elif log_level == "INFO":
+    logger.setLevel("INFO")
+else:
+    raise ValueError(f"Invalid {log_level}.")
+
+file_handler = TimedRotatingFileHandler(
+    "app.log", encoding="utf-8", when="W6", backupCount=0
+)
+logger.addHandler(file_handler)
+
+formatter = logging.Formatter(
+    fmt="{asctime} | {name} | {levelname} | {message}",
+    style="{",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+file_handler.setFormatter(formatter)
 
 
 def keyword_search(query, K=10):
@@ -173,7 +196,6 @@ def chat_fn(userInput, messages, sessionParams):
 def retrievedResults(query, sessionParams):
     query = sessionParams[0]["queryString"]
     submissionCount = sessionParams[0]["submissionCount"]
-    print(sessionParams)
 
     if submissionCount == 1:
         relevantChunks = getRelevantChunks(query)[:5]
@@ -204,7 +226,42 @@ def retrievedResults(query, sessionParams):
 
 
 # Function to handle the radio button selection
-def handle_option_selection(option_a, option_b, option_c, option_d, option_e):
+def handle_option_selection(
+    option_a, option_b, option_c, option_d, option_e, sessionParams
+):
+    if logger.isEnabledFor(logging.DEBUG):
+        # parse query, responses
+        # create dict to save for dataset
+
+        relevantChunks = getRelevantChunks(sessionParams[0]["queryString"])[:5]
+        chunkLabels = [
+            {
+                "chunk": relevantChunks[0],
+                "label": option_a,
+            },
+            {
+                "chunk": relevantChunks[1],
+                "label": option_b,
+            },
+            {
+                "chunk": relevantChunks[2],
+                "label": option_c,
+            },
+            {
+                "chunk": relevantChunks[3],
+                "label": option_d,
+            },
+            {
+                "chunk": relevantChunks[4],
+                "label": option_e,
+            },
+        ]
+        userFeedback = {
+            "query": sessionParams[0]["queryString"],
+            "userLabels": chunkLabels,
+        }
+        logger.debug(f"options submitted {json.dumps(userFeedback)}")
+
     # Display a thank you message summarizing the selections
     thank_you_message = (
         f"Thank you! Here are your selections:\n\n"
@@ -272,6 +329,10 @@ with gr.Blocks() as demo:
             textbox = gr.Textbox()
 
         # Handle the first submit to update the markdown, show the container with radio buttons and submit button
+        # Might be possible to have two events for textbox instead of chaining
+        # def reset_textbox():
+        #    return gr.update(value="")
+        # inputs.submit(reset_textbox, [], [inputs])
         textbox.submit(
             fn=chat_fn,
             inputs=[textbox, messageHistory, sessionParams],
@@ -279,13 +340,13 @@ with gr.Blocks() as demo:
         ).then(
             fn=retrievedResults,
             inputs=[textbox, sessionParams],
-            outputs=[markdown, options_container, thank_you_textbox, sessionParams],
+            outputs=[markdown, options_container, thank_you_textbox],
         )
 
         # Handle the final submit to process the selections and show the thank you message
         submit_button.click(
             fn=handle_option_selection,
-            inputs=[option_a, option_b, option_c, option_d, option_e],
+            inputs=[option_a, option_b, option_c, option_d, option_e, sessionParams],
             outputs=[options_container, thank_you_textbox],
         )
 
