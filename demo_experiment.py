@@ -1,6 +1,5 @@
 import json
 import logging
-from logging.handlers import TimedRotatingFileHandler
 
 import gradio as gr
 import requests
@@ -8,36 +7,28 @@ import weaviate
 from dotenv import dotenv_values
 from weaviate.classes.query import MetadataQuery
 
-from utils import get_embedding
+from utils import get_embedding, setup_logger
 
 CONFIG = dotenv_values(".env")
 client = weaviate.connect_to_local()
 collection = client.collections.get(name=CONFIG["COLLECTION_NAME"])
 SYSTEM_PROMPT_BASE = "I am a helpful assistant.\n"
 
-logger = logging.getLogger(__name__)
-log_level = CONFIG["LOG_LEVEL"]
-if log_level == "DEBUG":
-    logger.setLevel("DEBUG")
-elif log_level == "INFO":
-    logger.setLevel("INFO")
-else:
-    raise ValueError(f"Invalid {log_level}.")
-
-file_handler = TimedRotatingFileHandler(
-    "app.log", encoding="utf-8", when="W6", backupCount=0
-)
-logger.addHandler(file_handler)
-
-formatter = logging.Formatter(
-    fmt="{asctime} | {name} | {levelname} | {message}",
-    style="{",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-file_handler.setFormatter(formatter)
+# Setup the logger for the current module
+logger = setup_logger(__name__)
 
 
 def keyword_search(query, K=10):
+    """
+    Perform a keyword-based search using the BM25 algorithm.
+
+    Args:
+        query (str): The search query string.
+        K (int, optional): The number of results to return. Defaults to 10.
+
+    Returns:
+        list: A list of content strings that match the search query.
+    """
     response = collection.query.bm25(
         query=query,
         query_properties=["content"],
@@ -49,6 +40,16 @@ def keyword_search(query, K=10):
 
 
 def vector_search(query, K=10):
+    """
+    Perform a vector-based search using an embedding of the query.
+
+    Args:
+        query (str): The search query string.
+        K (int, optional): The number of results to return. Defaults to 10.
+
+    Returns:
+        list: A list of content strings that are most similar to the query vector.
+    """
     embedding = get_embedding(query)
     response = collection.query.near_vector(
         near_vector=embedding,
@@ -60,6 +61,16 @@ def vector_search(query, K=10):
 
 
 def hybrid_search(query, K=10):
+    """
+    Perform a hybrid search combining keyword-based and vector-based approaches.
+
+    Args:
+        query (str): The search query string.
+        K (int, optional): The number of results to return. Defaults to 10.
+
+    Returns:
+        list: A list of content strings that match both the query text and query vector.
+    """
     embedding = get_embedding(query)
     response = collection.query.hybrid(
         query=query,
@@ -73,6 +84,21 @@ def hybrid_search(query, K=10):
 
 
 def getRelevantChunks(query, strategy=CONFIG["RETRIEVAL"]):
+    """
+    Retrieve relevant chunks of content based on the specified retrieval strategy.
+
+    Args:
+        query (str): The search query string.
+        strategy (str, optional): The retrieval strategy to use ("keyword", "vector", or "hybrid").
+                                  Defaults to the strategy specified in CONFIG["RETRIEVAL"].
+
+    Returns:
+        list: A list of relevant content strings based on the specified strategy.
+
+    Raises:
+        ValueError: If an invalid strategy is provided.
+    """
+
     if strategy == "keyword":
         return keyword_search(query)
     if strategy == "vector":
@@ -86,6 +112,15 @@ def getRelevantChunks(query, strategy=CONFIG["RETRIEVAL"]):
 
 
 def createRetrievedContext(query):
+    """
+    Create a context string from relevant content chunks for use in an LLM prompt.
+
+    Args:
+        query (str): The search query string.
+
+    Returns:
+        str: A context string built from relevant content chunks.
+    """
     relevantChunks = getRelevantChunks(query)
 
     retrievedContext = (
@@ -102,6 +137,19 @@ def createRetrievedContext(query):
 
 
 def prompt_llm(messages):
+    """
+    Send a prompt to the language model and stream the response as a generator.
+
+    This function makes a POST request to the language model and yields the response
+    incrementally, allowing for real-time processing of the results.
+
+    Args:
+        messages (list): A list of message dictionaries to send to the language model.
+
+    Yields:
+        dict or None: The response from the language model, streamed in real-time as a dictionary.
+                      If there is an error, None is yielded.
+    """
     params = {
         "model": CONFIG["CHAT_MODEL"],
         "messages": messages,
@@ -135,6 +183,21 @@ def prompt_llm(messages):
 
 
 def chat_fn(userInput, messages, sessionParams):
+    """
+    Manage a chat session with an LLM, including context retrieval and message streaming, as a generator.
+
+    This function handles the conversation flow with a language model by updating the
+    chat history and streaming the assistant's response incrementally.
+
+    Args:
+        userInput (str): The user's input message.
+        messages (list): The chat history containing message dictionaries.
+        sessionParams (list): A list of session parameters, including flags for query handling.
+
+    Yields:
+        tuple: A tuple containing updated messages, the full chat history, and session parameters
+               after processing each step.
+    """
     prompt = userInput
     if sessionParams[0]["initialQuery"]:
         retrievedContext = createRetrievedContext(userInput)
@@ -197,7 +260,7 @@ def chat_fn(userInput, messages, sessionParams):
 
 # Define the function to be called on submit
 def retrievedResults(query, sessionParams):
-    #query = sessionParams[0]["queryString"]
+    # query = sessionParams[0]["queryString"]
     submissionCount = sessionParams[0]["submissionCount"]
 
     if submissionCount == 0:
@@ -331,35 +394,36 @@ with gr.Blocks() as demo:
             chatbot = gr.Chatbot(type="messages")
             textbox = gr.Textbox()
 
+    # Handle the first submit to update the markdown, show the container with radio buttons and submit button
+    textbox.submit(
+        fn=retrievedResults,
+        inputs=[textbox, sessionParams],
+        outputs=[markdown, options_container, thank_you_textbox],
+    )
 
-        # Handle the first submit to update the markdown, show the container with radio buttons and submit button
-        textbox.submit(
-            fn=retrievedResults,
-            inputs=[textbox, sessionParams],
-            outputs=[markdown, options_container, thank_you_textbox],
-        )
+    # Might be possible to have two events for textbox instead of chaining
+    textbox.submit(
+        fn=lambda: gr.update(interactive=False),
+        inputs=None,
+        outputs=textbox,
+    ).then(
+        fn=chat_fn,
+        inputs=[textbox, messageHistory, sessionParams],
+        outputs=[chatbot, messageHistory, sessionParams],
+    ).then(
+        fn=lambda: gr.update(value="", interactive=True),
+        inputs=None,
+        outputs=textbox,
+    )
 
-        # Might be possible to have two events for textbox instead of chaining
-        textbox.submit(
-            fn=lambda : gr.update(interactive=False),
-            inputs=None,
-            outputs=textbox
-        ).then(
-            fn=chat_fn,
-            inputs=[textbox, messageHistory, sessionParams],
-            outputs=[chatbot, messageHistory, sessionParams],
-        ).then(
-            fn=lambda : gr.update(value="", interactive=True),
-            inputs=None,
-            outputs=textbox,
-        )
+    # Handle the final submit to process the selections and show the thank you message
+    submit_button.click(
+        fn=handle_option_selection,
+        inputs=[option_a, option_b, option_c, option_d, option_e, sessionParams],
+        outputs=[options_container, thank_you_textbox],
+    )
 
-        # Handle the final submit to process the selections and show the thank you message
-        submit_button.click(
-            fn=handle_option_selection,
-            inputs=[option_a, option_b, option_c, option_d, option_e, sessionParams],
-            outputs=[options_container, thank_you_textbox],
-        )
+    demo.unload(client.close)
 
 # Launch the interface
 demo.launch()

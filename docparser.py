@@ -139,7 +139,7 @@ for idx, document in enumerate(
     try:
         collection.data.insert(
             properties=data_object,
-            uuid=generate_uuid5(data_object['content']),
+            uuid=generate_uuid5(data_object["content"]),
             vector=embedding,
         )
     except Exception as e:
