@@ -1,3 +1,5 @@
+import hashlib
+
 import requests
 from dotenv import dotenv_values
 
@@ -25,3 +27,14 @@ def get_embedding(text):
         # Request was not successful
         print("Error:", response.status_code)
         return None
+
+
+def compute_sha256(file_path):
+    sha256_hash = hashlib.sha256()
+
+    # Read the file in chunks to avoid loading the entire file into memory
+    with open(file_path, "rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+
+    return sha256_hash.hexdigest()

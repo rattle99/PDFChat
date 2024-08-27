@@ -40,6 +40,7 @@ file_handler.setFormatter(formatter)
 def keyword_search(query, K=10):
     response = collection.query.bm25(
         query=query,
+        query_properties=["content"],
         limit=K,
         return_metadata=MetadataQuery(score=True),
     )
@@ -62,6 +63,7 @@ def hybrid_search(query, K=10):
     embedding = get_embedding(query)
     response = collection.query.hybrid(
         query=query,
+        query_properties=["content"],
         vector=embedding,
         limit=K,
         return_metadata=MetadataQuery(score=True),
@@ -144,6 +146,7 @@ def chat_fn(userInput, messages, sessionParams):
     # Add the user's message to the history
     messages.append({"role": "user", "content": prompt})
     assistant_message = ""
+    # yield messages, messages, sessionParams
 
     # Stream the assistant's response
     for result in prompt_llm(messages):
@@ -194,10 +197,10 @@ def chat_fn(userInput, messages, sessionParams):
 
 # Define the function to be called on submit
 def retrievedResults(query, sessionParams):
-    query = sessionParams[0]["queryString"]
+    #query = sessionParams[0]["queryString"]
     submissionCount = sessionParams[0]["submissionCount"]
 
-    if submissionCount == 1:
+    if submissionCount == 0:
         relevantChunks = getRelevantChunks(query)[:5]
 
         markdown_content = "### Please rate the following options:\n\n"
@@ -328,19 +331,27 @@ with gr.Blocks() as demo:
             chatbot = gr.Chatbot(type="messages")
             textbox = gr.Textbox()
 
+
         # Handle the first submit to update the markdown, show the container with radio buttons and submit button
-        # Might be possible to have two events for textbox instead of chaining
-        # def reset_textbox():
-        #    return gr.update(value="")
-        # inputs.submit(reset_textbox, [], [inputs])
         textbox.submit(
+            fn=retrievedResults,
+            inputs=[textbox, sessionParams],
+            outputs=[markdown, options_container, thank_you_textbox],
+        )
+
+        # Might be possible to have two events for textbox instead of chaining
+        textbox.submit(
+            fn=lambda : gr.update(interactive=False),
+            inputs=None,
+            outputs=textbox
+        ).then(
             fn=chat_fn,
             inputs=[textbox, messageHistory, sessionParams],
             outputs=[chatbot, messageHistory, sessionParams],
         ).then(
-            fn=retrievedResults,
-            inputs=[textbox, sessionParams],
-            outputs=[markdown, options_container, thank_you_textbox],
+            fn=lambda : gr.update(value="", interactive=True),
+            inputs=None,
+            outputs=textbox,
         )
 
         # Handle the final submit to process the selections and show the thank you message
