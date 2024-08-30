@@ -423,7 +423,7 @@ with gr.Blocks() as demo:
         outputs=[options_container, thank_you_textbox],
     )
 
-    demo.unload(client.close)
 
+demo.queue(max_size=4)
 # Launch the interface
 demo.launch()

@@ -24,8 +24,8 @@ if not client.collections.exists(config["COLLECTION_NAME"]):
         name=config["COLLECTION_NAME"],
         properties=[
             Property(name="content", data_type=DataType.TEXT),
-            Property(name="doc_hash", data_type=DataType.TEXT),
-            Property(name="file_name", data_type=DataType.TEXT),
+            Property(name="doc_hash", data_type=DataType.TEXT_ARRAY),
+            Property(name="file_name", data_type=DataType.TEXT_ARRAY),
         ],
     )
     print("Done")
@@ -127,29 +127,41 @@ for pdf_path in tqdm(pdf_paths, desc="Chunking Documents ", colour="#bd4ced"):
 documents = word_count_chunk_sentences(all_texts)
 
 fails = 0
+duplicates = 0
 for idx, document in enumerate(
     tqdm(documents, desc="Parsing Chunks ", colour="#bd4ced")
 ):
     embedding = get_embedding(document[0])
     data_object = {
         "content": document[0],
-        "doc_hash": document[1],
-        "file_name": document[2],
+        "doc_hash": [document[1]],
+        "file_name": [document[2]],
     }
+    content_uuid = generate_uuid5(data_object["content"])
     try:
         collection.data.insert(
             properties=data_object,
-            uuid=generate_uuid5(data_object["content"]),
+            uuid=content_uuid,
             vector=embedding,
         )
     except Exception as e:
         # Handle the specific exception
         if "already exists" in str(e):
-            # Optional: You can take additional actions here, like updating the object instead.
-            fails += 1
+            # Append document names and hashes in cases of duplicate chunks
+            duplicates += 1
+            data_object = collection.query.fetch_object_by_id(content_uuid)
+            item = data_object.properties
+            item["doc_hash"].append(document[1])
+            item["file_name"].append(document[2])
+            data_object = collection.data.update(
+                uuid=content_uuid,
+                properties=item
+            )
         else:
+            fails += 1
             print("An unexpected error occurred.")
             print(e)
 
 client.close()
+print(f"{duplicates} duplicate chunks have not been added.")
 print(f"Failed to add {fails} chunks.")
